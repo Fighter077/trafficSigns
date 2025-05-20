@@ -1,0 +1,15 @@
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /home/ec2-user/trafficSigns
+hooks:
+  AfterInstall:
+    - location: scripts/copy_secrets.sh
+      runas: root
+    - location: scripts/install_frontend.sh
+      runas: root
+    - location: scripts/install_backend.sh
+      runas: root
+    - location: scripts/transfer_to_prod.sh
+      runas: root
