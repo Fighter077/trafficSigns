@@ -5,7 +5,22 @@
     </div>
     <div class="flex flex-col gap-2 w-[500px] max-w-full flex-grow">
         <p>Output</p>
-        <img #image src="" />
+        <div class="w-full h-fit relative">
+            <img #image src="" />
+            @for (detection of detections; track detection.id) {
+            <div class="absolute border-2 border-red-500" [ngStyle]="{
+                        top: detection.bbox[1] * 100 + '%',
+                        left: detection.bbox[0] * 100 + '%',
+                        width: (detection.bbox[2] - detection.bbox[0]) * 100 + '%',
+                        height: (detection.bbox[3] - detection.bbox[1]) * 100 + '%'
+                    }">
+                <div class="absolute top-0 left-0 bg-red-500 text-white text-xs font-bold px-1 py-0.5 rounded">
+                    {{ detection.class }}
+                    {{ detection.confidence.toFixed(2) }}
+                </div>
+            </div>
+            }
+        </div>
     </div>
 </div>
 
@@ -21,6 +36,7 @@
     <p>Stream Duration: {{ (stats.elapsedTime ? stats.elapsedTime : 0) }} s</p>
     <p>Image Res: {{ stats.imageWidth }} x {{ stats.imageHeight }}</p>
     <p>FPS: {{ stats.fps }}</p>
+    <p>FPS Analyzed: {{ stats.fpsAnalyzed }}</p>
 </ng-container>
 
 <button (click)="toggleTransmission()">{{ transmitting ? 'Stop' : 'Start' }} Transmission</button>

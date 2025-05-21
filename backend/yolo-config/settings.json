@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "/mnt/c/Users/User/Documents/Code/trafficSigns/backend/datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "39db42a314acb8758f6909ea0d2d8eb571becaf43671487d1c0734ad7dd06481",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

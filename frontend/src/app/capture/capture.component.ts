@@ -4,6 +4,7 @@ import { BehaviorSubject } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { Stats } from '../interfaces/stats.interface';
 import { FormsModule } from '@angular/forms';
+import { Detection } from '../interfaces/detection.interface';
 
 @Component({
   selector: 'app-capture',
@@ -35,9 +36,11 @@ export class CaptureComponent implements AfterViewInit {
     bytesPerSecondAvg: 0,
     imageWidth: 0,
     imageHeight: 0,
-    fps: 0
+    fps: 0,
+    fpsAnalyzed: 0
   });
 
+  detections: Detection[] = [];
   transmitting = false;
 
   constructor(private webrtcService: WebrtcService) {
@@ -51,6 +54,12 @@ export class CaptureComponent implements AfterViewInit {
     this.webrtcService.returnedImage$.subscribe((image) => {
       if (image) {
         this.imageElement.nativeElement.src = 'data:image/jpeg;base64,' + image;
+      }
+    });
+
+    this.webrtcService.returnedDetections$.subscribe((detections) => {
+      if (detections) {
+        this.detections = detections;
       }
     });
   }

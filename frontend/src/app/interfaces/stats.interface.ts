@@ -8,4 +8,5 @@ export interface Stats {
     imageWidth: number;
     imageHeight: number;
     fps: number;
+    fpsAnalyzed: number;
 }

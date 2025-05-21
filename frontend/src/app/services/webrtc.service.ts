@@ -19,6 +19,7 @@ export class WebrtcService {
 
   public meanColor$: BehaviorSubject<{ r: number, g: number, b: number }> = new BehaviorSubject<{ r: number, g: number, b: number }>({ r: 0, g: 0, b: 0 });
   public returnedImage$: BehaviorSubject<string | null> = new BehaviorSubject<string | null>(null);
+  public returnedDetections$: BehaviorSubject<any> = new BehaviorSubject<any>(null);
 
   public stats$: BehaviorSubject<Stats> = new BehaviorSubject<Stats>({
     latencyMs: 0,
@@ -29,7 +30,8 @@ export class WebrtcService {
     bytesPerSecondAvg: 0,
     imageWidth: 0,
     imageHeight: 0,
-    fps: 0
+    fps: 0,
+    fpsAnalyzed: 0
   });
 
   private lastTotalBytes: number = 0;
@@ -46,114 +48,89 @@ export class WebrtcService {
   async startWebRTC(videoElement: HTMLVideoElement) {
     const clientId = crypto.randomUUID(); // Or use any unique ID
 
-    this.outputSocket = new WebSocket(`ws://localhost:8080/ws?clientId=${clientId}`);
+    await this.openWebSocket(clientId);
+    await this.createConnection(videoElement, clientId);
+  }
 
-    const createConnection = async () => {
-      this.connectionState$.next('connecting');
-      this.iceConnectionState$.next('connecting');
+  createConnection = async (videoElement: HTMLVideoElement, clientId: string) => {
+    this.connectionState$.next('connecting');
+    this.iceConnectionState$.next('connecting');
 
-      this.pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ]
-      });
+    this.pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    });
 
-      this.pc.onconnectionstatechange = () => {
-        this.connectionState$.next(this.pc?.connectionState || 'disconnected');
-      }
-
-      this.pc.oniceconnectionstatechange = () => {
-        this.iceConnectionState$.next(this.pc?.iceConnectionState || 'disconnected');
-      }
-
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 10, max: 20 }
-        }
-      });
-
-      this.connectionState$.subscribe(state => {
-        if (state === 'connected') {
-          videoElement.srcObject = this.localStream;
-          videoElement.play();
-        }
-      });
-
-      // Add stream to PeerConnection
-      if (this.localStream) {
-        this.localStream.getTracks().forEach(track => {
-          if (this.pc) {
-            this.pc.addTrack(track, this.localStream as MediaStream);
-          }
-        });
-      }
-      const senders = this.pc.getSenders();
-      const videoSender = senders.find(s => s.track?.kind === 'video');
-
-      if (videoSender) {
-        const parameters = videoSender.getParameters();
-        if (!parameters.encodings) {
-          parameters.encodings = [{}];
-        }
-        parameters.degradationPreference = 'maintain-resolution';
-        parameters.encodings[0].maxBitrate = 500_000;  // 500 kbit/s -> 62.5 kB/s
-        parameters.encodings[0].maxFramerate = 10; // 10 fps
-        parameters.encodings[0].priority = 'high';
-        parameters.encodings[0].networkPriority = 'high';
-        await videoSender.setParameters(parameters);
-      } else {
-        console.log('No video sender found');
-      }
-
-      // Create offer
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-
-      // Send offer to backend
-      const response = await fetch('http://localhost:8080/offer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId: clientId,
-          sdp: this.pc.localDescription?.sdp,
-          type: this.pc.localDescription?.type
-        })
-      });
-
-      const answer = await response.json();
-      if (this.pc) {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-        this.startStatsMonitor();
-      }
+    this.pc.onconnectionstatechange = () => {
+      this.connectionState$.next(this.pc?.connectionState || 'disconnected');
     }
 
-    this.outputSocket.onopen = async () => {
-      if (this.outputSocket) {
-        this.outputSocket.onmessage = (event) => {
-          if (this.countOutput) {
-            this.totalBytesWebSocket += event.data.length;
-          }
-          const message = JSON.parse(event.data);
-          this.meanColor$.next(message.mean_color);
-          if (message.timestamp) {
-            const now = Date.now();
-            // reduce to one decimal place
-            this.stats$.next({
-              ...this.stats$.getValue(),
-              latencyMs: Math.max(Math.round((now - message.timestamp) * 10) / 10, 1),
-              imageWidth: message.image?.width || 0,
-              imageHeight: message.image?.height || 0,
-            });
-          }
-          if (message.image) {
-            this.returnedImage$.next(message.image.data);
-          }
-        };
+    this.pc.oniceconnectionstatechange = () => {
+      this.iceConnectionState$.next(this.pc?.iceConnectionState || 'disconnected');
+    }
+
+    this.localStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30, max: 60 }
       }
-      await createConnection();
-    };
+    });
+
+    this.connectionState$.subscribe(state => {
+      if (state === 'connected') {
+        videoElement.srcObject = this.localStream;
+        videoElement.play();
+      }
+    });
+
+    // Add stream to PeerConnection
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        if (this.pc) {
+          this.pc.addTrack(track, this.localStream as MediaStream);
+        }
+      });
+    }
+    const senders = this.pc.getSenders();
+    const videoSender = senders.find(s => s.track?.kind === 'video');
+
+    if (videoSender) {
+      const parameters = videoSender.getParameters();
+      if (!parameters.encodings) {
+        parameters.encodings = [{}];
+      }
+      parameters.degradationPreference = 'balanced';
+      parameters.encodings[0].maxBitrate = 500_000;  // 500 kbit/s -> 62.5 kB/s
+      parameters.encodings[0].maxFramerate = 20; // 20 fps
+      parameters.encodings[0].priority = 'high';
+      parameters.encodings[0].networkPriority = 'high';
+      await videoSender.setParameters(parameters);
+    } else {
+      console.log('No video sender found');
+    }
+
+    // Create offer
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+
+    // Send offer to backend
+    const response = await fetch('http://localhost:8080/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: clientId,
+        sdp: this.pc.localDescription?.sdp,
+        type: this.pc.localDescription?.type
+      })
+    });
+
+    const answer = await response.json();
+    if (this.pc) {
+      await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+      this.startStatsMonitor();
+    }
   }
 
   startStatsMonitor() {
@@ -212,10 +189,7 @@ export class WebrtcService {
   }
 
   stopTransmission(videoElement: HTMLVideoElement) {
-    if (this.outputSocket) {
-      this.outputSocket.close();
-      this.outputSocket = null;
-    }
+    this.closeWebSocket();
 
     if (videoElement.srcObject) {
       const stream = videoElement.srcObject as MediaStream;
@@ -233,6 +207,53 @@ export class WebrtcService {
   setCountOutput(countOutput: boolean) {
     if (this.outputSocket) {
       this.countOutput = countOutput;
+    }
+  }
+
+  openWebSocket(clientId: string) {
+    return new Promise<void>((resolve, reject) => {
+      this.outputSocket = new WebSocket(`ws://localhost:8080/ws?clientId=${clientId}`);
+      this.outputSocket.onopen = async () => {
+        if (this.outputSocket) {
+          resolve();
+          this.outputSocket.onmessage = (event) => {
+            if (this.countOutput) {
+              this.totalBytesWebSocket += event.data.length;
+            }
+            const message = JSON.parse(event.data);
+            this.meanColor$.next(message.mean_color);
+            if (message.timestamp && message.fps) {
+              const now = Date.now();
+              // reduce to one decimal place
+              this.stats$.next({
+                ...this.stats$.getValue(),
+                latencyMs: Math.max(Math.round((now - message.timestamp) * 10) / 10, 1),
+                imageWidth: message.image?.width || 0,
+                imageHeight: message.image?.height || 0,
+                fpsAnalyzed: Math.round(message.fps * 10) / 10
+              });
+            }
+            if (message.image) {
+              this.returnedImage$.next(message.image.data);
+            }
+            if (message.detections) {
+              this.returnedDetections$.next(
+                message.detections.map((detection: any) => ({
+                  ...detection,
+                  id: crypto.randomUUID(),
+                }))
+              );
+            }
+          };
+        }
+      }
+    });
+  }
+
+  closeWebSocket() {
+    if (this.outputSocket) {
+      this.outputSocket.close();
+      this.outputSocket = null;
     }
   }
 }

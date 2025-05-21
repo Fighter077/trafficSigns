@@ -1,3 +1,6 @@
 venv/
 
+archive/
 snapshots/
+runs/
+datasets/
