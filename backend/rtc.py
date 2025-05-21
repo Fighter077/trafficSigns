@@ -1,11 +1,12 @@
 # This is the Flask + aiortc backend for WebRTC
 
 import asyncio
+import base64
 import json
 import os
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, MediaStreamError
-from aiortc.contrib.media import MediaBlackhole, MediaRelay
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamError
+from aiortc.contrib.media import MediaRelay
 import aiohttp_cors
 import cv2
 import numpy as np
@@ -69,22 +70,27 @@ async def offer(request):
                             print(f"✅ Saved snapshot to {filename}")
                         frameCounter += 1
 
-                        if (img.shape[0] < 540 or img.shape[1] < 960):
-                            print(f"❌ Frame too small, skipping analysis, size: {img.shape}")
-                            continue
-
                         # Dummy analysis: mean color
                         mean_color = img.mean(axis=(0, 1)).astype(int).tolist()
                         timestamp = time.time() * 1000  # ms
                         result = {
                             "mean_color": {"b": mean_color[0], "g": mean_color[1], "r": mean_color[2]},
-                            "timestamp": timestamp
+                            "timestamp": timestamp,
+                            "image": {
+                                "width": img.shape[1],
+                                "height": img.shape[0],
+                                "data": base64.b64encode(cv2.imencode('.jpg', img)[1]).decode('utf-8')
+                            }
                         }
 
                         # 🔁 Send ONLY to matching client
                         ws = output_websockets.get(client_id)
                         if ws is not None and not ws.closed:
                             await ws.send_str(json.dumps(result))
+
+                        if (img.shape[0] < 270 or img.shape[1] < 480):
+                            print(f"❌ Frame too small, skipping analysis, size: {img.shape}")
+                            continue
                     except MediaStreamError:
                         print("✅ Stream ended normally (MediaStreamError)")
                         break

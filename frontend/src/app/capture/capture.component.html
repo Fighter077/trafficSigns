@@ -1,21 +1,27 @@
-<p>capture works!</p>
-<video #video autoplay playsinline muted></video>
+<div class="flex flex-row gap-4 flex-wrap">
+    <div class="flex flex-col gap-2 w-[500px] max-w-full flex-grow">
+        <p>Input</p>
+        <video #video autoplay playsinline muted></video>
+    </div>
+    <div class="flex flex-col gap-2 w-[500px] max-w-full flex-grow">
+        <p>Output</p>
+        <img #image src="" />
+    </div>
+</div>
 
 <p>Connection: {{ connectionState$ | async }}</p>
 
 <p>Mean Color: {{ meanColor$ | async | json }}</p>
-<p>Latency: {{ latencyMs$ | async }} ms</p>
-<ng-container *ngIf="sentBytes$ | async as sentBytes">
-    <p>MB Sent: {{ ((sentBytes) ? ((sentBytes) / 1_048_576) : 0).toFixed(2) }} MB</p>
-</ng-container>
-<ng-container *ngIf="byteRate$ | async as byteRate">
-    <p>Byte Rate: {{ (byteRate ? (byteRate) : 0) }} KB/s</p>
-</ng-container>
-<ng-container *ngIf="byteRateAvg$ | async as byteRateAvg">
-    <p>Byte Rate Avg: {{ (byteRateAvg ? (byteRateAvg) : 0) }} KB/s</p>
-</ng-container>
-<ng-container *ngIf="streamDuration$ | async as streamDuration">
-    <p>Stream Duration: {{ (streamDuration ? streamDuration : 0) }} s</p>
+<ng-container *ngIf="stats$ | async as stats">
+    <p>Latency: {{ stats.latencyMs }} ms</p>
+    <p>Bytes Sent: {{ ((stats.totalBytesSent) ? (stats.totalBytesSent / 1_048_576) : 0).toFixed(2) }} MB</p>
+    <p>Bytes Received: {{ ((stats.totalBytesReceived) ? (stats.totalBytesReceived / 1_048_576) : 0).toFixed(2) }} MB</p>
+    <p>Byte Rate: {{ (stats.bytesPerSecond ? (stats.bytesPerSecond / 1_024).toFixed(2) : 0) }} KB/s</p>
+    <p>Byte Rate Avg: {{ (stats.bytesPerSecondAvg ? (stats.bytesPerSecondAvg / 1_024).toFixed(2) : 0) }} KB/s</p>
+    <p>Stream Duration: {{ (stats.elapsedTime ? stats.elapsedTime : 0) }} s</p>
+    <p>Image Res: {{ stats.imageWidth }} x {{ stats.imageHeight }}</p>
+    <p>FPS: {{ stats.fps }}</p>
 </ng-container>
 
 <button (click)="toggleTransmission()">{{ transmitting ? 'Stop' : 'Start' }} Transmission</button>
+<input type="checkbox" [value]="countOutput" (change)="toggleCountOutput()" />

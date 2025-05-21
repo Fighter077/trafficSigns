@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
+import { Stats } from '../interfaces/stats.interface';
 
 @Injectable({
   providedIn: 'root'
@@ -17,14 +18,28 @@ export class WebrtcService {
   private outputSocket: WebSocket | null = null;
 
   public meanColor$: BehaviorSubject<{ r: number, g: number, b: number }> = new BehaviorSubject<{ r: number, g: number, b: number }>({ r: 0, g: 0, b: 0 });
-  public latencyMs$: BehaviorSubject<number> = new BehaviorSubject<number>(0);
-  public sentBytes$: BehaviorSubject<number> = new BehaviorSubject<number>(0);
-  public byteRate$: BehaviorSubject<number> = new BehaviorSubject<number>(0);
-  public byteRateAvg$: BehaviorSubject<number> = new BehaviorSubject<number>(0);
-  public streamDuration$: BehaviorSubject<number> = new BehaviorSubject<number>(0);
+  public returnedImage$: BehaviorSubject<string | null> = new BehaviorSubject<string | null>(null);
 
+  public stats$: BehaviorSubject<Stats> = new BehaviorSubject<Stats>({
+    latencyMs: 0,
+    totalBytesSent: 0,
+    totalBytesReceived: 0,
+    elapsedTime: 0,
+    bytesPerSecond: 0,
+    bytesPerSecondAvg: 0,
+    imageWidth: 0,
+    imageHeight: 0,
+    fps: 0
+  });
+
+  private lastTotalBytes: number = 0;
   private lastBytesSent: number = 0;
+  private lastBytesReceived: number = 0;
   private lastTime: number = 0;
+
+  private countOutput: boolean = false;
+
+  private totalBytesWebSocket: number = 0;
 
   private streamStartTime: number | null = null;
 
@@ -55,7 +70,7 @@ export class WebrtcService {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 }
+          frameRate: { ideal: 10, max: 20 }
         }
       });
 
@@ -78,12 +93,12 @@ export class WebrtcService {
       const videoSender = senders.find(s => s.track?.kind === 'video');
 
       if (videoSender) {
-        console.log('Limiting video bitrate');
         const parameters = videoSender.getParameters();
         if (!parameters.encodings) {
           parameters.encodings = [{}];
         }
-        parameters.encodings[0].maxBitrate = 500_000;  // 500 kbps
+        parameters.degradationPreference = 'maintain-resolution';
+        parameters.encodings[0].maxBitrate = 500_000;  // 500 kbit/s -> 62.5 kB/s
         parameters.encodings[0].maxFramerate = 10; // 10 fps
         parameters.encodings[0].priority = 'high';
         parameters.encodings[0].networkPriority = 'high';
@@ -117,13 +132,23 @@ export class WebrtcService {
     this.outputSocket.onopen = async () => {
       if (this.outputSocket) {
         this.outputSocket.onmessage = (event) => {
-          this.sentBytes$.next(this.sentBytes$.getValue() + event.data.length);
+          if (this.countOutput) {
+            this.totalBytesWebSocket += event.data.length;
+          }
           const message = JSON.parse(event.data);
           this.meanColor$.next(message.mean_color);
           if (message.timestamp) {
             const now = Date.now();
             // reduce to one decimal place
-            this.latencyMs$.next(Math.max(Math.round((now - message.timestamp) * 10) / 10, 1));
+            this.stats$.next({
+              ...this.stats$.getValue(),
+              latencyMs: Math.max(Math.round((now - message.timestamp) * 10) / 10, 1),
+              imageWidth: message.image?.width || 0,
+              imageHeight: message.image?.height || 0,
+            });
+          }
+          if (message.image) {
+            this.returnedImage$.next(message.image.data);
           }
         };
       }
@@ -135,40 +160,55 @@ export class WebrtcService {
     if (!this.pc) return;
 
     const monitor = async () => {
-      while (this.pc && this.pc.connectionState === 'new' || this.pc?.connectionState === 'connected') {
+      while (this.pc && (this.pc.connectionState === 'new' || this.pc.connectionState === 'connected')) {
         const stats: RTCStatsReport = await this.pc.getStats();
 
-        let bytesReceived = 0;
-        let bytesSent = 0;
-        let elapsedTime = 0;
+        let bytesSentNow = 0;
+        let bytesReceivedNow = 0;
+        let fps = 0;
 
         stats.forEach(report => {
           if (report.type === 'outbound-rtp' && report.kind === 'video') {
-            console.log('Outbound RTP stats:', report);
-            const now = Date.now();
-            elapsedTime = (now - this.streamStartTime!) / 1000; // in seconds
-            bytesSent = report.bytesSent || 0;
-          } else if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
-            console.log('Inbound RTP stats:', report);
-            const now = Date.now();
-            elapsedTime = (now - this.streamStartTime!) / 1000; // in seconds
-            bytesReceived = report.bytesReceived || 0;
+            bytesSentNow = report.bytesSent || 0;
+            fps = report.framesPerSecond || 0;
+          } else if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            bytesReceivedNow = report.bytesReceived || 0;
           }
         });
 
-        this.sentBytes$.next(bytesReceived + bytesSent);
-        this.byteRateAvg$.next(Math.round((((bytesReceived + bytesSent) * 10) / elapsedTime) / 1_024) / 10 || 0); // in kbps
-        this.byteRate$.next(Math.round((((bytesSent - this.lastBytesSent) * 10) / (elapsedTime - this.lastTime)) / 1_024) / 10 || 0); // in kbps
-        this.streamDuration$.next(Math.round(elapsedTime));
-        this.lastBytesSent = bytesSent;
+        bytesReceivedNow += this.totalBytesWebSocket;
+        const totalBytesNow = bytesSentNow + bytesReceivedNow;
+
+        const now = Date.now();
+        const elapsedTime = (now - this.streamStartTime!) / 1000;
+
+        const deltaTime = elapsedTime - this.lastTime;
+        const deltaBytes = totalBytesNow - this.lastTotalBytes;
+
+        const bytesPerSecond = deltaTime > 0 ? deltaBytes / deltaTime : 0;
+        const bytesPerSecondAvg = totalBytesNow / elapsedTime;
+
+        this.lastBytesSent = bytesSentNow;
+        this.lastBytesReceived = bytesReceivedNow;
+        this.lastTotalBytes = totalBytesNow;
         this.lastTime = elapsedTime;
 
-        await new Promise(resolve => setTimeout(resolve, 1000)); // every second
+        this.stats$.next({
+          ...this.stats$.getValue(),
+          totalBytesSent: bytesSentNow,
+          totalBytesReceived: bytesReceivedNow,
+          elapsedTime: Math.round(elapsedTime),
+          bytesPerSecond,
+          bytesPerSecondAvg,
+          fps: Math.round(fps),
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     };
 
     this.streamStartTime = Date.now();
-    monitor(); // start monitor loop
+    monitor();
   }
 
   stopTransmission(videoElement: HTMLVideoElement) {
@@ -188,5 +228,11 @@ export class WebrtcService {
     this.localStream = null;
     this.connectionState$.next('disconnected');
     this.iceConnectionState$.next('disconnected');
+  }
+
+  setCountOutput(countOutput: boolean) {
+    if (this.outputSocket) {
+      this.countOutput = countOutput;
+    }
   }
 }
